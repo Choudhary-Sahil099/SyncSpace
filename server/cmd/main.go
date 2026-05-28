@@ -15,6 +15,7 @@ func main() {
 	go hub.Run()
 
 	router.GET("/ws/:roomId", func(c *gin.Context) {
+
 		websocket.ServeWS(hub, c)
 	})
 
