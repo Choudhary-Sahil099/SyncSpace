@@ -2,19 +2,23 @@ package websocket
 
 import (
 	"fmt"
+	"syncspace/internal/storage"
 )
 
 type Hub struct {
-	Rooms      map[string]*Room
+	Rooms map[string]*Room
+	Store *storage.DocumentStore
+
 	Register   chan *Client
 	Unregister chan *Client
 	Broadcast  chan Message
 }
 
 func NewHub() *Hub {
-
 	return &Hub{
-		Rooms:      make(map[string]*Room),
+		Rooms: make(map[string]*Room),
+		Store: storage.NewDocumentStore(),
+
 		Register:   make(chan *Client),
 		Unregister: make(chan *Client),
 		Broadcast:  make(chan Message),
@@ -56,10 +60,11 @@ func (h *Hub) Run() {
 
 			room.Clients[client] = true
 
+			document := h.Store.GetDocument(room.ID)
 			syncMessage := Message{
 				Type:    "document_sync",
 				RoomID:  room.ID,
-				Content: room.Document,
+				Content: document,
 			}
 
 			client.Send <- syncMessage
@@ -133,11 +138,15 @@ func (h *Hub) Run() {
 
 					room.Document = message.Content
 
-					fmt.Println(
-						"DOCUMENT UPDATED:",
-						room.Document,
+					h.Store.SaveDocument(
+						message.RoomID,
+						message.Content,
 					)
 				}
+				fmt.Println(
+					"DOCUMENT SAVED:",
+					message.RoomID,
+				)
 
 				for client := range room.Clients {
 
