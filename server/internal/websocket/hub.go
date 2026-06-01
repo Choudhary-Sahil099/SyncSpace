@@ -100,14 +100,13 @@ func (h *Hub) Run() {
 
 			room.Clients[client] = true
 
-			document := h.Store.GetDocument(
-				room.ID,
-			)
+			doc := h.Store.GetDocument(room.ID)
 
 			syncMessage := Message{
 				Type:    "document_sync",
 				RoomID:  room.ID,
-				Content: document,
+				Content: doc.Content,
+				Version: doc.Version,
 			}
 
 			client.Send <- syncMessage
@@ -199,14 +198,14 @@ func (h *Hub) Run() {
 
 				if message.Type == "edit" {
 
-					h.Store.SaveDocument(
+					version := h.Store.SaveDocument(
 						message.RoomID,
 						message.Content,
 					)
-
+					message.Version = version
 					fmt.Println(
-						"DOCUMENT SAVED:",
-						message.RoomID,
+						"DOCUMENT VERSION:",
+						version,
 					)
 				}
 
