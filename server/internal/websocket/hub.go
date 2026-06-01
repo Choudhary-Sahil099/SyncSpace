@@ -34,7 +34,45 @@ func (h *Hub) removeClient(
 
 	client.Close()
 
-	fmt.Println("CLIENT REMOVED:", client.Username)
+	fmt.Println(
+		"CLIENT REMOVED:",
+		client.Username,
+	)
+}
+
+func (h *Hub) getUsers(room *Room) []string {
+
+	users := []string{}
+
+	for client := range room.Clients {
+		users = append(users, client.Username)
+	}
+
+	return users
+}
+
+func (h *Hub) broadcastUsers(room *Room) {
+
+	usersMessage := Message{
+		Type:   "users_list",
+		RoomID: room.ID,
+		Users:  h.getUsers(room),
+	}
+
+	for client := range room.Clients {
+
+		select {
+
+		case client.Send <- usersMessage:
+
+		default:
+
+			fmt.Println(
+				"CLIENT BUFFER FULL:",
+				client.Username,
+			)
+		}
+	}
 }
 
 func (h *Hub) Run() {
@@ -45,14 +83,16 @@ func (h *Hub) Run() {
 
 		case client := <-h.Register:
 
-			fmt.Println("CLIENT JOINED:", client.Username)
+			fmt.Println(
+				"CLIENT JOINED:",
+				client.Username,
+			)
 
 			if h.Rooms[client.RoomID] == nil {
 
 				h.Rooms[client.RoomID] = &Room{
-					ID:       client.RoomID,
-					Clients:  make(map[*Client]bool),
-					Document: "",
+					ID:      client.RoomID,
+					Clients: make(map[*Client]bool),
 				}
 			}
 
@@ -60,7 +100,10 @@ func (h *Hub) Run() {
 
 			room.Clients[client] = true
 
-			document := h.Store.GetDocument(room.ID)
+			document := h.Store.GetDocument(
+				room.ID,
+			)
+
 			syncMessage := Message{
 				Type:    "document_sync",
 				RoomID:  room.ID,
@@ -71,7 +114,7 @@ func (h *Hub) Run() {
 
 			joinMessage := Message{
 				Type:     "user_joined",
-				RoomID:   client.RoomID,
+				RoomID:   room.ID,
 				UserID:   client.ID,
 				Username: client.Username,
 				Content:  client.Username + " joined the room",
@@ -83,13 +126,21 @@ func (h *Hub) Run() {
 
 				case c.Send <- joinMessage:
 
-					fmt.Println("JOIN MESSAGE SENT TO:", c.Username)
+					fmt.Println(
+						"JOIN MESSAGE SENT TO:",
+						c.Username,
+					)
 
 				default:
 
-					h.removeClient(room, c)
+					fmt.Println(
+						"CLIENT BUFFER FULL:",
+						c.Username,
+					)
 				}
 			}
+
+			h.broadcastUsers(room)
 
 		case client := <-h.Unregister:
 
@@ -97,11 +148,14 @@ func (h *Hub) Run() {
 
 				if _, exists := room.Clients[client]; exists {
 
-					h.removeClient(room, client)
+					h.removeClient(
+						room,
+						client,
+					)
 
 					leaveMessage := Message{
 						Type:     "user_left",
-						RoomID:   client.RoomID,
+						RoomID:   room.ID,
 						UserID:   client.ID,
 						Username: client.Username,
 						Content:  client.Username + " left the room",
@@ -115,38 +169,46 @@ func (h *Hub) Run() {
 
 						default:
 
-							h.removeClient(room, c)
+							fmt.Println(
+								"CLIENT BUFFER FULL:",
+								c.Username,
+							)
 						}
 					}
 
+					h.broadcastUsers(room)
+
 					if len(room.Clients) == 0 {
 
-						delete(h.Rooms, room.ID)
+						delete(
+							h.Rooms,
+							room.ID,
+						)
 
-						fmt.Println("ROOM DELETED:", room.ID)
+						fmt.Println(
+							"ROOM DELETED:",
+							room.ID,
+						)
 					}
 				}
 			}
 
 		case message := <-h.Broadcast:
 
-			fmt.Println("BROADCAST EVENT:", message.Content)
-
 			if room, ok := h.Rooms[message.RoomID]; ok {
 
 				if message.Type == "edit" {
-
-					room.Document = message.Content
 
 					h.Store.SaveDocument(
 						message.RoomID,
 						message.Content,
 					)
+
+					fmt.Println(
+						"DOCUMENT SAVED:",
+						message.RoomID,
+					)
 				}
-				fmt.Println(
-					"DOCUMENT SAVED:",
-					message.RoomID,
-				)
 
 				for client := range room.Clients {
 
@@ -161,7 +223,10 @@ func (h *Hub) Run() {
 
 					default:
 
-						h.removeClient(room, client)
+						fmt.Println(
+							"CLIENT BUFFER FULL:",
+							client.Username,
+						)
 					}
 				}
 			}
