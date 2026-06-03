@@ -197,12 +197,29 @@ func (h *Hub) Run() {
 			if room, ok := h.Rooms[message.RoomID]; ok {
 
 				if message.Type == "edit" {
+					doc := h.Store.GetDocument(
+						message.RoomID,
+					)
+					if message.Version != doc.Version {
+
+						fmt.Println(
+							"VERSION CONFLICT",
+							"client:",
+							message.Version,
+							"server:",
+							doc.Version,
+						)
+
+						continue
+					}
 
 					version := h.Store.SaveDocument(
 						message.RoomID,
 						message.Content,
 					)
+
 					message.Version = version
+
 					fmt.Println(
 						"DOCUMENT VERSION:",
 						version,

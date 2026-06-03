@@ -4,7 +4,7 @@ function App() {
   const [content, setContent] = useState("");
   const [users, setUsers] = useState<string[]>([]);
   const socketRef = useRef<WebSocket | null>(null);
-
+  const versionRef = useRef(0);
   // debounce --> delay messsage so that the message recieved is very corrent to avoid the previous issue of not similarity
   const timeoutRef = useRef<number | null>(null);
 
@@ -31,7 +31,12 @@ function App() {
 
       if (message.type === "edit" || message.type === "document_sync") {
         setContent(message.content);
+
+        if (message.version !== undefined) {
+          versionRef.current = message.version;
+        }
       }
+      console.log("DOCUMENT VERSION:", message.version);
     };
 
     return () => {
@@ -55,9 +60,11 @@ function App() {
           type: "edit",
           roomId: "room1",
           content: newContent,
+          version: 1,
         }),
       );
     }, 50);
+    console.log("SENDING VERSION:", versionRef.current);
   };
 
   return (
