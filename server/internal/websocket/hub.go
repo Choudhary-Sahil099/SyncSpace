@@ -210,6 +210,27 @@ func (h *Hub) Run() {
 							doc.Version,
 						)
 
+						conflictMessage := Message{
+							Type:    "version_conflict",
+							RoomID:  message.RoomID,
+							Content: doc.Content,
+							Version: doc.Version,
+						}
+
+						for client := range room.Clients {
+
+							select {
+
+							case client.Send <- conflictMessage:
+
+							default:
+								fmt.Println(
+									"CLIENT BUFFER FULL:",
+									client.Username,
+								)
+							}
+						}
+
 						continue
 					}
 

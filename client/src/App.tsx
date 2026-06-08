@@ -36,6 +36,13 @@ function App() {
           versionRef.current = message.version;
         }
       }
+      if (message.type === "version_conflict") {
+        console.log("CONFLICT RECOVERY", message.version);
+
+        setContent(message.content);
+
+        versionRef.current = message.version;
+      }
       console.log("DOCUMENT VERSION:", message.version);
     };
 
@@ -60,7 +67,7 @@ function App() {
           type: "edit",
           roomId: "room1",
           content: newContent,
-          version: 1,
+          version: versionRef.current, // change to 1 when to test the conflict detection else versionRef.current
         }),
       );
     }, 50);
