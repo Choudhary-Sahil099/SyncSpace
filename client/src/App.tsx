@@ -4,6 +4,7 @@ function App() {
   const [content, setContent] = useState("");
   const [users, setUsers] = useState<string[]>([]);
   const socketRef = useRef<WebSocket | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const versionRef = useRef(0);
   // debounce --> delay messsage so that the message recieved is very corrent to avoid the previous issue of not similarity
   const timeoutRef = useRef<number | null>(null);
@@ -36,6 +37,9 @@ function App() {
           versionRef.current = message.version;
         }
       }
+      if (message.type === "cursor_move") {
+        console.log("REMOTE CURSOR:", message.cursor.position);
+      }
       if (message.type === "version_conflict") {
         console.log("CONFLICT RECOVERY", message.version);
 
@@ -50,6 +54,21 @@ function App() {
       socket.close();
     };
   }, []);
+  const handleCursorMove = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    const position = e.currentTarget.selectionStart;
+
+    socketRef.current?.send(
+      JSON.stringify({
+        type: "cursor_move",
+        roomId: "room1",
+        cursor: {
+          position,
+        },
+      }),
+    );
+
+    console.log("CURSOR SENT:", position);
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newContent = e.target.value;
@@ -79,8 +98,10 @@ function App() {
       <h1>SyncSpace</h1>
 
       <textarea
+        ref={textareaRef}
         value={content}
         onChange={handleChange}
+        onSelect={handleCursorMove}
         style={{
           width: "100%",
           height: "500px",
@@ -88,6 +109,26 @@ function App() {
         }}
       />
       <div>
+        <button
+          onClick={() => {
+            socketRef.current?.send(
+              JSON.stringify({
+                type: "edit",
+                roomId: "room1",
+
+                operation: {
+                  type: "insert",
+                  position: 0,
+                  text: "A",
+                },
+
+                version: versionRef.current,
+              }),
+            );
+          }}
+        >
+          Insert A
+        </button>
         <h3>Collaborators</h3>
 
         {users.map((user) => (
