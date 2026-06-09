@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	writeWait = 10 * time.Second
-	pongWait  = 60 * time.Second
-	pingPeriod = (pongWait * 9) / 10
+	writeWait      = 10 * time.Second
+	pongWait       = 60 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
 	maxMessageSize = 5120
 )
 
@@ -81,7 +81,10 @@ func (c *Client) ReadMessage(hub *Hub) {
 			continue
 		}
 
-		hub.Broadcast <- message
+		hub.Broadcast <- Event{
+			Client:  c,
+			Message: message,
+		}
 	}
 }
 

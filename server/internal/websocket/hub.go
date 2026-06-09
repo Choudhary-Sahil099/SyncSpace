@@ -11,7 +11,7 @@ type Hub struct {
 
 	Register   chan *Client
 	Unregister chan *Client
-	Broadcast  chan Message
+	Broadcast  chan Event
 }
 
 func NewHub() *Hub {
@@ -21,7 +21,7 @@ func NewHub() *Hub {
 
 		Register:   make(chan *Client),
 		Unregister: make(chan *Client),
-		Broadcast:  make(chan Message),
+		Broadcast:  make(chan Event),
 	}
 }
 
@@ -31,6 +31,16 @@ func (h *Hub) removeClient(
 ) {
 
 	delete(room.Clients, client)
+
+	delete(
+		room.Cursors,
+		client.ID,
+	)
+
+	fmt.Println(
+		"CURSOR REMOVED:",
+		client.Username,
+	)
 
 	client.Close()
 
@@ -93,6 +103,7 @@ func (h *Hub) Run() {
 				h.Rooms[client.RoomID] = &Room{
 					ID:      client.RoomID,
 					Clients: make(map[*Client]bool),
+					Cursors: make(map[string]int),
 				}
 			}
 
@@ -151,7 +162,26 @@ func (h *Hub) Run() {
 						room,
 						client,
 					)
+					cursorRemove := Message{
+						Type:   "cursor_remove",
+						RoomID: room.ID,
+						UserID: client.ID,
+					}
 
+					for c := range room.Clients {
+
+						select {
+
+						case c.Send <- cursorRemove:
+
+						default:
+
+							fmt.Println(
+								"CLIENT BUFFER FULL:",
+								c.Username,
+							)
+						}
+					}
 					leaveMessage := Message{
 						Type:     "user_left",
 						RoomID:   room.ID,
@@ -192,14 +222,34 @@ func (h *Hub) Run() {
 				}
 			}
 
-		case message := <-h.Broadcast:
+		case event := <-h.Broadcast:
+
+			message := event.Message
+			sender := event.Client
 
 			if room, ok := h.Rooms[message.RoomID]; ok {
+				if message.Type == "cursor_move" {
+
+					if message.Cursor != nil {
+
+						room.Cursors[sender.ID] =
+							message.Cursor.Position
+						message.UserID = sender.ID
+						message.Username = sender.Username
+						fmt.Println(
+							"CURSOR:",
+							sender.Username,
+							"->",
+							message.Cursor.Position,
+						)
+					}
+				}
 
 				if message.Type == "edit" {
 					doc := h.Store.GetDocument(
 						message.RoomID,
 					)
+
 					if message.Version != doc.Version {
 
 						fmt.Println(
@@ -217,22 +267,62 @@ func (h *Hub) Run() {
 							Version: doc.Version,
 						}
 
-						for client := range room.Clients {
+						select {
 
-							select {
+						case sender.Send <- conflictMessage:
 
-							case client.Send <- conflictMessage:
+							fmt.Println(
+								"CONFLICT RECOVERY SENT TO:",
+								sender.Username,
+							)
 
-							default:
-								fmt.Println(
-									"CLIENT BUFFER FULL:",
-									client.Username,
-								)
-							}
+						default:
+
+							fmt.Println(
+								"CLIENT BUFFER FULL:",
+								sender.Username,
+							)
 						}
 
 						continue
 					}
+
+					fmt.Println("CONTENT:", message.Content)
+					fmt.Printf("OPERATION: %+v\n", message.Operation)
+					if message.Operation != nil {
+
+						fmt.Println(
+							"CURRENT DOCUMENT:",
+							doc.Content,
+						)
+
+						updatedDoc, err := ApplyOperation(
+							doc.Content,
+							message.Operation,
+						)
+
+						if err != nil {
+
+							fmt.Println(
+								"OPERATION ERROR:",
+								err,
+							)
+
+							continue
+						}
+
+						fmt.Println(
+							"UPDATED DOCUMENT:",
+							updatedDoc,
+						)
+
+						message.Content = updatedDoc
+					}
+
+					fmt.Println(
+						"FINAL CONTENT TO SAVE:",
+						message.Content,
+					)
 
 					version := h.Store.SaveDocument(
 						message.RoomID,
@@ -248,6 +338,10 @@ func (h *Hub) Run() {
 				}
 
 				for client := range room.Clients {
+					if message.Type == "cursor_move" &&
+						client == sender {
+						continue
+					}
 
 					select {
 

@@ -5,6 +5,15 @@ function App() {
   const [users, setUsers] = useState<string[]>([]);
   const socketRef = useRef<WebSocket | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  type RemoteCursor = {
+    username: string;
+    position: number;
+    color: string;
+  };
+
+  const [remoteCursors, setRemoteCursors] = useState<
+    Record<string, RemoteCursor>
+  >({});
   const versionRef = useRef(0);
   // debounce --> delay messsage so that the message recieved is very corrent to avoid the previous issue of not similarity
   const timeoutRef = useRef<number | null>(null);
@@ -29,7 +38,22 @@ function App() {
       if (message.type === "users_list") {
         setUsers(message.users);
       }
+      if (message.type === "cursor_move") {
+        setRemoteCursors((prev) => ({
+          ...prev,
+          [message.userId]: {
+            username: message.username,
+            position: message.cursor.position,
+            color: "blue",
+          },
+        }));
 
+        console.log(
+          "REMOTE CURSOR:",
+          message.username,
+          message.cursor.position,
+        );
+      }
       if (message.type === "edit" || message.type === "document_sync") {
         setContent(message.content);
 
@@ -37,9 +61,7 @@ function App() {
           versionRef.current = message.version;
         }
       }
-      if (message.type === "cursor_move") {
-        console.log("REMOTE CURSOR:", message.cursor.position);
-      }
+
       if (message.type === "version_conflict") {
         console.log("CONFLICT RECOVERY", message.version);
 
@@ -47,7 +69,9 @@ function App() {
 
         versionRef.current = message.version;
       }
-      console.log("DOCUMENT VERSION:", message.version);
+      if (message.version !== undefined) {
+        console.log("DOCUMENT VERSION:", message.version);
+      }
     };
 
     return () => {
@@ -108,6 +132,19 @@ function App() {
           fontSize: "18px",
         }}
       />
+      <h3>Remote Cursors</h3>
+
+      {Object.entries(remoteCursors).map(([userId, cursor]) => (
+        <div
+          key={userId}
+          style={{
+            color: cursor.color,
+            fontWeight: "bold",
+          }}
+        >
+          ● {cursor.username}: {cursor.position}
+        </div>
+      ))}
       <div>
         <button
           onClick={() => {
