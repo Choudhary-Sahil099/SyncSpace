@@ -8,6 +8,8 @@ function App() {
   type RemoteCursor = {
     username: string;
     position: number;
+    selectionStart: number;
+    selectionEnd: number;
     color: string;
   };
 
@@ -44,6 +46,8 @@ function App() {
           [message.userId]: {
             username: message.username,
             position: message.cursor.position,
+            selectionStart: message.cursor.selectionStart,
+            selectionEnd: message.cursor.selectionEnd,
             color: "blue",
           },
         }));
@@ -154,11 +158,24 @@ function App() {
             fontWeight: "bold",
           }}
         >
-          ● {cursor.username}: {cursor.position}
+          <div
+            key={userId}
+            style={{
+              color: cursor.color,
+              fontWeight: "bold",
+              marginBottom: "12px",
+            }}
+          >
+            <div>● {cursor.username}</div>
+            <div>Cursor: {cursor.position}</div>
+            <div>
+              Selection: {cursor.selectionStart} → {cursor.selectionEnd}
+            </div>
+          </div>
         </div>
       ))}
       <div>
-        <button
+        {/* <button
           onClick={() => {
             socketRef.current?.send(
               JSON.stringify({
@@ -177,7 +194,7 @@ function App() {
           }}
         >
           Insert A
-        </button>
+        </button> */}
         <h3>Collaborators</h3>
 
         {users.map((user) => (
