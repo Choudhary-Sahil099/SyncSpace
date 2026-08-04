@@ -79,7 +79,10 @@ function App() {
     };
   }, []);
   const handleCursorMove = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-    const position = e.currentTarget.selectionStart;
+    const selectionStart = e.currentTarget.selectionStart;
+    const selectionEnd = e.currentTarget.selectionEnd;
+
+    const position = selectionEnd;
 
     socketRef.current?.send(
       JSON.stringify({
@@ -87,11 +90,20 @@ function App() {
         roomId: "room1",
         cursor: {
           position,
+          selectionStart,
+          selectionEnd,
         },
       }),
     );
 
-    console.log("CURSOR SENT:", position);
+    console.log(
+      "CURSOR SENT:",
+      position,
+      "Selection:",
+      selectionStart,
+      "->",
+      selectionEnd,
+    );
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {

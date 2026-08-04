@@ -103,7 +103,7 @@ func (h *Hub) Run() {
 				h.Rooms[client.RoomID] = &Room{
 					ID:      client.RoomID,
 					Clients: make(map[*Client]bool),
-					Cursors: make(map[string]int),
+					Cursors: make(map[string]CursorState),
 				}
 			}
 
@@ -232,15 +232,18 @@ func (h *Hub) Run() {
 
 					if message.Cursor != nil {
 
-						room.Cursors[sender.ID] =
-							message.Cursor.Position
+						room.Cursors[sender.ID] = CursorState{
+							Username:       sender.Username,
+							Position:       message.Cursor.Position,
+							SelectionStart: message.Cursor.SelectionStart,
+							SelectionEnd:   message.Cursor.SelectionEnd,
+						}
 						message.UserID = sender.ID
 						message.Username = sender.Username
-						fmt.Println(
-							"CURSOR:",
-							sender.Username,
-							"->",
-							message.Cursor.Position,
+
+						fmt.Printf(
+							"CURSOR STATE: %+v\n",
+							room.Cursors[sender.ID],
 						)
 					}
 				}

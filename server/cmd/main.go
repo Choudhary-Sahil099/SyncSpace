@@ -2,7 +2,6 @@ package main
 
 import (
 	"syncspace/internal/websocket"
-
 	"github.com/gin-gonic/gin"
 )
 

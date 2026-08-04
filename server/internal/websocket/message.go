@@ -1,6 +1,8 @@
 package websocket
 type Cursor struct {
-    Position int `json:"position"`
+    Position       int `json:"position"`
+    SelectionStart int `json:"selectionStart"`
+    SelectionEnd   int `json:"selectionEnd"`
 }
 
 type Message struct {
