@@ -7,4 +7,7 @@ const (
 
     EventCursorMove   = "cursor_move"
     EventCursorRemove = "cursor_remove"
+
+    InsertOperation = "insert"
+	DeleteOperation = "delete"
 )

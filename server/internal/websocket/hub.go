@@ -9,6 +9,8 @@ type Hub struct {
 	Rooms map[string]*Room
 	Store *storage.DocumentStore
 
+	OTEngine *OTEngine
+
 	Register   chan *Client
 	Unregister chan *Client
 	Broadcast  chan Event
@@ -16,9 +18,9 @@ type Hub struct {
 
 func NewHub() *Hub {
 	return &Hub{
-		Rooms: make(map[string]*Room),
-		Store: storage.NewDocumentStore(),
-
+		Rooms:      make(map[string]*Room),
+		Store:      storage.NewDocumentStore(),
+		OTEngine:   NewOTEngine(),
 		Register:   make(chan *Client),
 		Unregister: make(chan *Client),
 		Broadcast:  make(chan Event),
@@ -294,6 +296,26 @@ func (h *Hub) Run() {
 					fmt.Printf("OPERATION: %+v\n", message.Operation)
 					if message.Operation != nil {
 
+						message.Operation = &Operation{
+							ID:          message.Operation.ID,
+							UserID:      sender.ID,
+							Type:        message.Operation.Type,
+							Position:    message.Operation.Position,
+							Text:        message.Operation.Text,
+							Length:      message.Operation.Length,
+							BaseVersion: message.Version,
+							Timestamp:   message.Operation.Timestamp,
+							Version:     0,
+						}
+
+						transformed := h.OTEngine.TransformAgainstHistory(
+							*message.Operation,
+						)
+
+						message.Operation = &transformed
+					}
+					if message.Operation != nil {
+
 						fmt.Println(
 							"CURRENT DOCUMENT:",
 							doc.Content,
@@ -333,7 +355,14 @@ func (h *Hub) Run() {
 					)
 
 					message.Version = version
+					if message.Operation != nil {
 
+						message.Operation.Version = version
+
+						h.OTEngine.History.Add(
+							*message.Operation,
+						)
+					}
 					fmt.Println(
 						"DOCUMENT VERSION:",
 						version,
