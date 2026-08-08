@@ -2,7 +2,7 @@ package websocket
 
 import (
 	"net/http"
-
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -15,32 +15,42 @@ var upgrader = websocket.Upgrader{
 
 func ServeWS(hub *Hub, c *gin.Context) {
 
-	roomID := c.Param("roomId")
+    roomID := c.Param("roomId")
+    username := c.Query("username")
 
-	username := c.Query("username")
+    fmt.Println("WS CONNECT REQUEST:", username, roomID)
 
-	conn, err := upgrader.Upgrade(
-		c.Writer,
-		c.Request,
-		nil,
-	)
+    conn, err := upgrader.Upgrade(
+        c.Writer,
+        c.Request,
+        nil,
+    )
 
-	if err != nil {
-		return
-	}
+    if err != nil {
+        fmt.Println("WS UPGRADE ERROR:", err)
+        return
+    }
 
-	client := &Client{
-		ID:       conn.RemoteAddr().String(),
-		Username: username,
-		RoomID:   roomID,
-		Conn:     conn,
+    fmt.Println(
+        "WS UPGRADED:",
+        username,
+        conn.RemoteAddr().String(),
+    )
 
-		Send: make(chan Message, 256),
-	}
+    client := &Client{
+        ID:       conn.RemoteAddr().String(),
+        Username: username,
+        RoomID:   roomID,
+        Conn:     conn,
+        Send:     make(chan Message, 256),
+    }
 
-	hub.Register <- client
+    fmt.Println("REGISTERING CLIENT:", client.Username)
 
-	go client.WriteMessage()
+    hub.Register <- client
 
-	go client.ReadMessage(hub)
+    fmt.Println("CLIENT REGISTERED:", client.Username)
+
+    go client.WriteMessage()
+    go client.ReadMessage(hub)
 }

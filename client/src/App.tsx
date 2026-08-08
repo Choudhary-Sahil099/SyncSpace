@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-
+import { generateOperation, applyOperation, type Operation } from "./operation";
 function App() {
   const [content, setContent] = useState("");
   const [users, setUsers] = useState<string[]>([]);
   const socketRef = useRef<WebSocket | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const previousContentRef = useRef("");
   type RemoteCursor = {
     username: string;
     position: number;
@@ -17,9 +18,42 @@ function App() {
     Record<string, RemoteCursor>
   >({});
   const versionRef = useRef(0);
-  // debounce --> delay messsage so that the message recieved is very corrent to avoid the previous issue of not similarity
-  const timeoutRef = useRef<number | null>(null);
+  const pendingOperationsRef = useRef<Operation[]>([]);
+  const operationInFlightRef = useRef(false);
 
+  const sendNextOperation = () => {
+    if (operationInFlightRef.current) {
+      return;
+    }
+
+    const operation = pendingOperationsRef.current[0];
+
+    if (!operation) {
+      return;
+    }
+
+    operationInFlightRef.current = true;
+
+    socketRef.current?.send(
+      JSON.stringify({
+        type: "edit",
+        roomId: "room1",
+        operation: {
+          ...operation,
+          baseVersion: versionRef.current,
+          timestamp: Date.now(),
+        },
+        version: versionRef.current,
+      }),
+    );
+
+    console.log(
+      "SENDING QUEUED OPERATION:",
+      operation,
+      "BASE VERSION:",
+      versionRef.current,
+    );
+  };
   useEffect(() => {
     const username = "user-" + Math.floor(Math.random() * 1000);
 
@@ -58,8 +92,42 @@ function App() {
           message.cursor.position,
         );
       }
-      if (message.type === "edit" || message.type === "document_sync") {
-        setContent(message.content);
+      if (message.type === "document_sync") {
+        const syncedContent = message.content ?? "";
+
+        setContent(syncedContent);
+
+        previousContentRef.current = syncedContent;
+
+        if (message.version !== undefined) {
+          versionRef.current = message.version;
+        }
+      }
+      if (message.type === "edit_ack") {
+        console.log("EDIT ACK:", message.version);
+
+        versionRef.current = message.version;
+        pendingOperationsRef.current.shift();
+
+        operationInFlightRef.current = false;
+
+        console.log(
+          "OPERATION ACKNOWLEDGED",
+          "REMAINING QUEUE:",
+          pendingOperationsRef.current.length,
+        );
+        sendNextOperation();
+      }
+      if (message.type === "edit") {
+        if (message.operation) {
+          const updatedContent = applyOperation(
+            previousContentRef.current,
+            message.operation,
+          );
+
+          setContent(updatedContent);
+          previousContentRef.current = updatedContent;
+        }
 
         if (message.version !== undefined) {
           versionRef.current = message.version;
@@ -69,7 +137,11 @@ function App() {
       if (message.type === "version_conflict") {
         console.log("CONFLICT RECOVERY", message.version);
 
-        setContent(message.content);
+        const recoveredContent = message.content ?? "";
+
+        setContent(recoveredContent);
+
+        previousContentRef.current = recoveredContent;
 
         versionRef.current = message.version;
       }
@@ -113,24 +185,31 @@ function App() {
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newContent = e.target.value;
 
-    // instant local update
+    const oldContent = previousContentRef.current ?? "";
+
+    const operation = generateOperation(oldContent, newContent);
+    console.log("OLD:", JSON.stringify(oldContent));
+    console.log("NEW:", JSON.stringify(newContent));
+    console.log("GENERATED OP:", operation);
+
     setContent(newContent);
-    // clear previous debounce
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
+
+    previousContentRef.current = newContent;
+
+    if (!operation) {
+      return;
     }
-    // debounce websocket send
-    timeoutRef.current = setTimeout(() => {
-      socketRef.current?.send(
-        JSON.stringify({
-          type: "edit",
-          roomId: "room1",
-          content: newContent,
-          version: versionRef.current, // change to 1 when to test the conflict detection else versionRef.current
-        }),
-      );
-    }, 50);
-    console.log("SENDING VERSION:", versionRef.current);
+
+    pendingOperationsRef.current.push(operation);
+
+    console.log(
+      "OPERATION QUEUED:",
+      operation,
+      "QUEUE SIZE:",
+      pendingOperationsRef.current.length,
+    );
+
+    sendNextOperation();
   };
 
   return (
@@ -156,45 +235,19 @@ function App() {
           style={{
             color: cursor.color,
             fontWeight: "bold",
+            marginBottom: "12px",
           }}
         >
-          <div
-            key={userId}
-            style={{
-              color: cursor.color,
-              fontWeight: "bold",
-              marginBottom: "12px",
-            }}
-          >
-            <div>● {cursor.username}</div>
-            <div>Cursor: {cursor.position}</div>
-            <div>
-              Selection: {cursor.selectionStart} → {cursor.selectionEnd}
-            </div>
+          <div>● {cursor.username}</div>
+
+          <div>Cursor: {cursor.position}</div>
+
+          <div>
+            Selection: {cursor.selectionStart} → {cursor.selectionEnd}
           </div>
         </div>
       ))}
       <div>
-        {/* <button
-          onClick={() => {
-            socketRef.current?.send(
-              JSON.stringify({
-                type: "edit",
-                roomId: "room1",
-
-                operation: {
-                  type: "insert",
-                  position: 0,
-                  text: "A",
-                },
-
-                version: versionRef.current,
-              }),
-            );
-          }}
-        >
-          Insert A
-        </button> */}
         <h3>Collaborators</h3>
 
         {users.map((user) => (

@@ -355,6 +355,28 @@ func (h *Hub) Run() {
 					)
 
 					message.Version = version
+					ack := Message{
+						Type:      "edit_ack",
+						RoomID:    message.RoomID,
+						Version:   version,
+						Operation: message.Operation,
+					}
+
+					select {
+					case sender.Send <- ack:
+						fmt.Println(
+							"EDIT ACK SENT TO:",
+							sender.Username,
+							"VERSION:",
+							version,
+						)
+
+					default:
+						fmt.Println(
+							"CLIENT BUFFER FULL:",
+							sender.Username,
+						)
+					}
 					if message.Operation != nil {
 
 						message.Operation.Version = version
@@ -370,13 +392,14 @@ func (h *Hub) Run() {
 				}
 
 				for client := range room.Clients {
-					if message.Type == "cursor_move" &&
-						client == sender {
+
+					if client == sender &&
+						(message.Type == "cursor_move" ||
+							message.Type == "edit") {
 						continue
 					}
 
 					select {
-
 					case client.Send <- message:
 
 						fmt.Println(
