@@ -81,3 +81,26 @@ export function applyOperation(
 
   return content;
 }
+export function transformCursor(
+  position: number,
+  operation: Operation,
+): number {
+  if (operation.type === "insert") {
+    if (operation.position <= position) {
+      return position + (operation.text?.length ?? 0);
+    }
+  }
+
+  if (operation.type === "delete") {
+    if (operation.position < position) {
+      const deletedBefore = Math.min(
+        operation.length ?? 0,
+        position - operation.position,
+      );
+
+      return position - deletedBefore;
+    }
+  }
+
+  return position;
+}

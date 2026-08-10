@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { generateOperation, applyOperation, type Operation } from "./operation";
+import {
+  generateOperation,
+  applyOperation,
+  transformCursor,
+  type Operation,
+} from "./operation";
 function App() {
   const [content, setContent] = useState("");
   const [users, setUsers] = useState<string[]>([]);
@@ -58,7 +63,7 @@ function App() {
     const username = "user-" + Math.floor(Math.random() * 1000);
 
     const socket = new WebSocket(
-      `ws://localhost:8080/ws/room1?username=${username}`,
+      `ws://${window.location.hostname}:8080/ws/room1?username=${username}`,
     );
 
     socketRef.current = socket;
@@ -120,6 +125,32 @@ function App() {
       }
       if (message.type === "edit") {
         if (message.operation) {
+          const selectionStart = textareaRef.current?.selectionStart ?? 0;
+
+          const selectionEnd = textareaRef.current?.selectionEnd ?? 0;
+          console.log("REMOTE EDIT DEBUG:", {
+            currentContent: previousContentRef.current,
+            cursorStart: selectionStart,
+            cursorEnd: selectionEnd,
+            operation: message.operation,
+          });
+          const newSelectionStart = transformCursor(
+            selectionStart,
+            message.operation,
+          );
+
+          const newSelectionEnd = transformCursor(
+            selectionEnd,
+            message.operation,
+          );
+          console.log("CURSOR BEFORE:", selectionStart, "->", selectionEnd);
+
+          console.log(
+            "CURSOR AFTER TRANSFORM:",
+            newSelectionStart,
+            "->",
+            newSelectionEnd,
+          );
           const updatedContent = applyOperation(
             previousContentRef.current,
             message.operation,
@@ -127,6 +158,25 @@ function App() {
 
           setContent(updatedContent);
           previousContentRef.current = updatedContent;
+          requestAnimationFrame(() => {
+            console.log(
+              "RESTORING CURSOR:",
+              newSelectionStart,
+              "->",
+              newSelectionEnd,
+            );
+            if (textareaRef.current) {
+              textareaRef.current.selectionStart = newSelectionStart;
+              textareaRef.current.selectionEnd = newSelectionEnd;
+            }
+
+            console.log(
+              "CURSOR AFTER RESTORE:",
+              textareaRef.current?.selectionStart,
+              "->",
+              textareaRef.current?.selectionEnd,
+            );
+          });
         }
 
         if (message.version !== undefined) {

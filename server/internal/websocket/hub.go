@@ -251,110 +251,94 @@ func (h *Hub) Run() {
 				}
 
 				if message.Type == "edit" {
-					doc := h.Store.GetDocument(
-						message.RoomID,
-					)
 
-					if message.Version != doc.Version {
+					doc := h.Store.GetDocument(message.RoomID)
+
+					if message.Operation == nil {
+						continue
+					}
+
+					// Build the authoritative operation from the sender.
+					operation := *message.Operation
+
+					operation.UserID = sender.ID
+					operation.BaseVersion = message.Version
+
+					fmt.Println("CONTENT:", message.Content)
+					fmt.Printf("INCOMING OPERATION: %+v\n", operation)
+					fmt.Println("SERVER VERSION:", doc.Version)
+					fmt.Println("CLIENT BASE VERSION:", operation.BaseVersion)
+
+					// if client behind transform the operation
+					if operation.BaseVersion < doc.Version {
 
 						fmt.Println(
-							"VERSION CONFLICT",
-							"client:",
-							message.Version,
-							"server:",
-							doc.Version,
+							"TRANSFORMING AGAINST HISTORY FROM VERSION:",
+							operation.BaseVersion,
 						)
 
-						conflictMessage := Message{
-							Type:    "version_conflict",
-							RoomID:  message.RoomID,
-							Content: doc.Content,
-							Version: doc.Version,
-						}
+						operation = h.OTEngine.TransformAgainstHistory(
+							operation,
+						)
+					}
 
-						select {
+					message.Operation = &operation
 
-						case sender.Send <- conflictMessage:
+					fmt.Printf(
+						"TRANSFORMED OPERATION: %+v\n",
+						operation,
+					)
 
-							fmt.Println(
-								"CONFLICT RECOVERY SENT TO:",
-								sender.Username,
-							)
+					//transformed operation to current server 
+					fmt.Println(
+						"CURRENT DOCUMENT:",
+						doc.Content,
+					)
 
-						default:
+					updatedDoc, err := ApplyOperation(
+						doc.Content,
+						message.Operation,
+					)
 
-							fmt.Println(
-								"CLIENT BUFFER FULL:",
-								sender.Username,
-							)
-						}
+					if err != nil {
+
+						fmt.Println(
+							"OPERATION ERROR:",
+							err,
+						)
 
 						continue
 					}
 
-					fmt.Println("CONTENT:", message.Content)
-					fmt.Printf("OPERATION: %+v\n", message.Operation)
-					if message.Operation != nil {
-
-						message.Operation = &Operation{
-							ID:          message.Operation.ID,
-							UserID:      sender.ID,
-							Type:        message.Operation.Type,
-							Position:    message.Operation.Position,
-							Text:        message.Operation.Text,
-							Length:      message.Operation.Length,
-							BaseVersion: message.Version,
-							Timestamp:   message.Operation.Timestamp,
-							Version:     0,
-						}
-
-						transformed := h.OTEngine.TransformAgainstHistory(
-							*message.Operation,
-						)
-
-						message.Operation = &transformed
-					}
-					if message.Operation != nil {
-
-						fmt.Println(
-							"CURRENT DOCUMENT:",
-							doc.Content,
-						)
-
-						updatedDoc, err := ApplyOperation(
-							doc.Content,
-							message.Operation,
-						)
-
-						if err != nil {
-
-							fmt.Println(
-								"OPERATION ERROR:",
-								err,
-							)
-
-							continue
-						}
-
-						fmt.Println(
-							"UPDATED DOCUMENT:",
-							updatedDoc,
-						)
-
-						message.Content = updatedDoc
-					}
-
 					fmt.Println(
-						"FINAL CONTENT TO SAVE:",
-						message.Content,
+						"UPDATED DOCUMENT:",
+						updatedDoc,
 					)
 
+					message.Content = updatedDoc
+
+					// Save the new document
 					version := h.Store.SaveDocument(
 						message.RoomID,
 						message.Content,
 					)
 
 					message.Version = version
+
+					// The operation belongs To the server version or not
+					message.Operation.Version = version
+
+					//transformed operation to OT history.
+					h.OTEngine.History.Add(
+						*message.Operation,
+					)
+
+					fmt.Println(
+						"DOCUMENT VERSION:",
+						version,
+					)
+
+					// Ack the sender
 					ack := Message{
 						Type:      "edit_ack",
 						RoomID:    message.RoomID,
@@ -363,7 +347,9 @@ func (h *Hub) Run() {
 					}
 
 					select {
+
 					case sender.Send <- ack:
+
 						fmt.Println(
 							"EDIT ACK SENT TO:",
 							sender.Username,
@@ -372,23 +358,12 @@ func (h *Hub) Run() {
 						)
 
 					default:
+
 						fmt.Println(
 							"CLIENT BUFFER FULL:",
 							sender.Username,
 						)
 					}
-					if message.Operation != nil {
-
-						message.Operation.Version = version
-
-						h.OTEngine.History.Add(
-							*message.Operation,
-						)
-					}
-					fmt.Println(
-						"DOCUMENT VERSION:",
-						version,
-					)
 				}
 
 				for client := range room.Clients {
