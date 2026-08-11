@@ -1,9 +1,11 @@
 package storage
 
 import "sync"
+
 type Document struct {
-	Content string
-	Version int64
+	Content           string
+	Version           int64
+	AppliedOperations map[string]int64
 }
 type DocumentStore struct {
 	mu        sync.RWMutex
@@ -18,6 +20,7 @@ func NewDocumentStore() *DocumentStore {
 func (ds *DocumentStore) SaveDocument(
 	roomID string,
 	content string,
+	operationID string,
 ) int64 {
 
 	ds.mu.Lock()
@@ -28,8 +31,9 @@ func (ds *DocumentStore) SaveDocument(
 	if !exists {
 
 		doc = &Document{
-			Content: "",
-			Version: 0,
+			Content:           "",
+			Version:           0,
+			AppliedOperations: make(map[string]int64),
 		}
 
 		ds.Documents[roomID] = doc
@@ -38,7 +42,27 @@ func (ds *DocumentStore) SaveDocument(
 	doc.Content = content
 	doc.Version++
 
+	if operationID != "" {
+		doc.AppliedOperations[operationID] = doc.Version
+	}
+
 	return doc.Version
+}
+func (ds *DocumentStore) GetOperationVersion(roomID string, operationID string) (int64, bool) {
+	if operationID == "" {
+		return 0, false
+	}
+
+	ds.mu.RLock()
+	defer ds.mu.RUnlock()
+
+	doc, exists := ds.Documents[roomID]
+	if !exists {
+		return 0, false
+	}
+
+	version, exists := doc.AppliedOperations[operationID]
+	return version, exists
 }
 func (ds *DocumentStore) GetDocument(
 	roomID string,

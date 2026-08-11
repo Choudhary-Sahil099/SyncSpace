@@ -258,6 +258,28 @@ func (h *Hub) Run() {
 						continue
 					}
 
+					// A reconnect can retry an operation after the server has applied it
+					// but before its acknowledgement reached the browser. Acknowledge the
+					// original operation again instead of applying it a second time.
+					if _, exists := h.Store.GetOperationVersion(message.RoomID, message.Operation.ID); exists {
+						ack := Message{
+							Type:      "edit_ack",
+							RoomID:    message.RoomID,
+							Content:   doc.Content,
+							Version:   doc.Version,
+							Operation: message.Operation,
+						}
+
+						select {
+						case sender.Send <- ack:
+							fmt.Println("DUPLICATE EDIT ACK SENT TO:", sender.Username)
+						default:
+							fmt.Println("CLIENT BUFFER FULL:", sender.Username)
+						}
+
+						continue
+					}
+
 					// Build the authoritative operation from the sender.
 					operation := *message.Operation
 
@@ -289,7 +311,7 @@ func (h *Hub) Run() {
 						operation,
 					)
 
-					//transformed operation to current server 
+					//transformed operation to current server
 					fmt.Println(
 						"CURRENT DOCUMENT:",
 						doc.Content,
@@ -321,6 +343,7 @@ func (h *Hub) Run() {
 					version := h.Store.SaveDocument(
 						message.RoomID,
 						message.Content,
+						message.Operation.ID,
 					)
 
 					message.Version = version
@@ -342,6 +365,7 @@ func (h *Hub) Run() {
 					ack := Message{
 						Type:      "edit_ack",
 						RoomID:    message.RoomID,
+						Content:   message.Content,
 						Version:   version,
 						Operation: message.Operation,
 					}

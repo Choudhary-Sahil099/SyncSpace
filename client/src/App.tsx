@@ -5,6 +5,11 @@ import {
   transformCursor,
   type Operation,
 } from "./operation";
+
+const ROOM_ID = "room1";
+const RECONNECT_BASE_DELAY_MS = 500;
+const RECONNECT_MAX_DELAY_MS = 10_000;
+
 function App() {
   const [content, setContent] = useState("");
   const [users, setUsers] = useState<string[]>([]);
@@ -29,9 +34,20 @@ function App() {
   } | null>(null);
   const pendingOperationsRef = useRef<Operation[]>([]);
   const operationInFlightRef = useRef(false);
+  const waitingForSyncRef = useRef(true);
+  const hasSynchronizedRef = useRef(false);
+  const recoveringRef = useRef(false);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const [connectionStatus, setConnectionStatus] = useState("Connecting…");
 
   const sendNextOperation = () => {
-    if (operationInFlightRef.current) {
+    const socket = socketRef.current;
+    if (
+      operationInFlightRef.current ||
+      waitingForSyncRef.current ||
+      socket?.readyState !== WebSocket.OPEN
+    ) {
       return;
     }
 
@@ -43,18 +59,22 @@ function App() {
 
     operationInFlightRef.current = true;
 
-    socketRef.current?.send(
-      JSON.stringify({
-        type: "edit",
-        roomId: "room1",
-        operation: {
-          ...operation,
-          baseVersion: versionRef.current,
-          timestamp: Date.now(),
-        },
-        version: versionRef.current,
-      }),
-    );
+    try {
+      socket.send(
+        JSON.stringify({
+          type: "edit",
+          roomId: ROOM_ID,
+          operation: {
+            ...operation,
+            baseVersion: versionRef.current,
+            timestamp: Date.now(),
+          },
+          version: versionRef.current,
+        }),
+      );
+    } catch {
+      operationInFlightRef.current = false;
+    }
 
     console.log(
       "SENDING QUEUED OPERATION:",
@@ -78,19 +98,57 @@ function App() {
     pendingCursorRef.current = null;
   }, [content]);
   useEffect(() => {
-    const username = "user-" + Math.floor(Math.random() * 1000);
+    const usernameKey = "syncspace-username";
+    const username =
+      sessionStorage.getItem(usernameKey) ??
+      `user-${Math.floor(Math.random() * 1000)}`;
+    sessionStorage.setItem(usernameKey, username);
+    let disposed = false;
 
-    const socket = new WebSocket(
-      `ws://${window.location.hostname}:8080/ws/room1?username=${username}`,
-    );
+    const reapplyPendingOperations = (serverContent: string) => {
+      const recoveredContent = pendingOperationsRef.current.reduce(
+        (currentContent, operation) => applyOperation(currentContent, operation),
+        serverContent,
+      );
 
-    socketRef.current = socket;
-
-    socket.onopen = () => {
-      console.log("CONNECTED");
+      setContent(recoveredContent);
+      previousContentRef.current = recoveredContent;
     };
 
-    socket.onmessage = (event) => {
+    const connect = () => {
+      if (disposed) {
+        return;
+      }
+
+      if (!navigator.onLine) {
+        setConnectionStatus("Waiting for network…");
+        return;
+      }
+
+      const currentSocket = socketRef.current;
+      if (
+        currentSocket?.readyState === WebSocket.OPEN ||
+        currentSocket?.readyState === WebSocket.CONNECTING
+      ) {
+        return;
+      }
+
+      waitingForSyncRef.current = true;
+      recoveringRef.current = hasSynchronizedRef.current;
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const socket = new WebSocket(
+        `${protocol}://${window.location.hostname}:8080/ws/${ROOM_ID}?username=${encodeURIComponent(username)}`,
+      );
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        if (socketRef.current !== socket) return;
+        reconnectAttemptRef.current = 0;
+        setConnectionStatus("Connected — synchronizing…");
+        console.log("CONNECTED");
+      };
+
+      socket.onmessage = (event) => {
       const message = JSON.parse(event.data);
 
       console.log("MESSAGE:", message);
@@ -118,21 +176,41 @@ function App() {
       if (message.type === "document_sync") {
         const syncedContent = message.content ?? "";
 
-        setContent(syncedContent);
-
-        previousContentRef.current = syncedContent;
-
         if (message.version !== undefined) {
           versionRef.current = message.version;
         }
+
+        // snapshot sending
+        reapplyPendingOperations(syncedContent);
+        waitingForSyncRef.current = false;
+        hasSynchronizedRef.current = true;
+        setConnectionStatus("Connected");
+        sendNextOperation();
       }
       if (message.type === "edit_ack") {
         console.log("EDIT ACK:", message.version);
 
-        versionRef.current = message.version;
-        pendingOperationsRef.current.shift();
+        if (message.version !== undefined) {
+          versionRef.current = message.version;
+        }
+
+        const acknowledgedOperation = pendingOperationsRef.current[0];
+        if (
+          acknowledgedOperation &&
+          (!message.operation || message.operation.id === acknowledgedOperation.id)
+        ) {
+          pendingOperationsRef.current.shift();
+        }
 
         operationInFlightRef.current = false;
+
+        if (recoveringRef.current && message.content !== undefined) {
+          reapplyPendingOperations(message.content);
+        }
+
+        if (pendingOperationsRef.current.length === 0) {
+          recoveringRef.current = false;
+        }
 
         console.log(
           "OPERATION ACKNOWLEDGED",
@@ -191,19 +269,73 @@ function App() {
 
         const recoveredContent = message.content ?? "";
 
-        setContent(recoveredContent);
-
-        previousContentRef.current = recoveredContent;
-
         versionRef.current = message.version;
+        reapplyPendingOperations(recoveredContent);
       }
       if (message.version !== undefined) {
         console.log("DOCUMENT VERSION:", message.version);
       }
+      };
+
+      const scheduleReconnect = () => {
+        if (disposed || reconnectTimerRef.current !== null) return;
+
+        operationInFlightRef.current = false;
+        waitingForSyncRef.current = true;
+
+        if (!navigator.onLine) {
+          setConnectionStatus("Waiting for network…");
+          return;
+        }
+
+        const attempt = reconnectAttemptRef.current++;
+        const delay = Math.min(
+          RECONNECT_BASE_DELAY_MS * 2 ** attempt,
+          RECONNECT_MAX_DELAY_MS,
+        );
+        setConnectionStatus(`Reconnecting in ${Math.ceil(delay / 1000)}s…`);
+        reconnectTimerRef.current = window.setTimeout(() => {
+          reconnectTimerRef.current = null;
+          connect();
+        }, delay);
+      };
+
+      socket.onerror = () => socket.close();
+      socket.onclose = () => {
+        if (socketRef.current === socket) socketRef.current = null;
+        scheduleReconnect();
+      };
     };
 
+    connect();
+
+    const handleOffline = () => {
+      operationInFlightRef.current = false;
+      waitingForSyncRef.current = true;
+      setConnectionStatus("Waiting for network…");
+      socketRef.current?.close();
+    };
+
+    const handleOnline = () => {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      setConnectionStatus("Reconnecting…");
+      connect();
+    };
+
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+
     return () => {
-      socket.close();
+      disposed = true;
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+      }
+      socketRef.current?.close();
     };
   }, []);
   const handleCursorMove = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
@@ -212,10 +344,12 @@ function App() {
 
     const position = selectionEnd;
 
-    socketRef.current?.send(
+    if (socketRef.current?.readyState !== WebSocket.OPEN) return;
+
+    socketRef.current.send(
       JSON.stringify({
         type: "cursor_move",
-        roomId: "room1",
+        roomId: ROOM_ID,
         cursor: {
           position,
           selectionStart,
@@ -267,6 +401,7 @@ function App() {
   return (
     <div style={{ padding: "40px" }}>
       <h1>SyncSpace</h1>
+      <p>{connectionStatus}</p>
 
       <textarea
         ref={textareaRef}

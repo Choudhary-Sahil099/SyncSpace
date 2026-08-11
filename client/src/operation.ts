@@ -1,9 +1,20 @@
 export type Operation = {
+  id: string;
   type: "insert" | "delete";
   position: number;
   text?: string;
   length?: number;
 };
+
+function createOperationId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  // Fallback for browsers that do not implement UUid. It only
+  // needs to be unique for retry de-duplication within the running server. 
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 export function generateOperation(
   oldContent: string,
@@ -37,6 +48,7 @@ export function generateOperation(
 
   if (oldEnd === start) {
     return {
+      id: createOperationId(),
       type: "insert",
       position: start,
       text: newContent.slice(start, newEnd),
@@ -45,6 +57,7 @@ export function generateOperation(
 
   if (newEnd === start) {
     return {
+      id: createOperationId(),
       type: "delete",
       position: start,
       length: oldEnd - start,
@@ -52,6 +65,7 @@ export function generateOperation(
   }
 
   return {
+    id: createOperationId(),
     type: "delete",
     position: start,
     length: oldEnd - start,
