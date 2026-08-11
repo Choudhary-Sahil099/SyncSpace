@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   generateOperation,
   applyOperation,
@@ -23,6 +23,10 @@ function App() {
     Record<string, RemoteCursor>
   >({});
   const versionRef = useRef(0);
+  const pendingCursorRef = useRef<{
+    start: number;
+    end: number;
+  } | null>(null);
   const pendingOperationsRef = useRef<Operation[]>([]);
   const operationInFlightRef = useRef(false);
 
@@ -59,6 +63,20 @@ function App() {
       versionRef.current,
     );
   };
+  useLayoutEffect(() => {
+    const cursor = pendingCursorRef.current;
+
+    if (!cursor || !textareaRef.current) {
+      return;
+    }
+
+    textareaRef.current.selectionStart = cursor.start;
+    textareaRef.current.selectionEnd = cursor.end;
+
+    console.log("LAYOUT CURSOR RESTORE:", cursor.start, "->", cursor.end);
+
+    pendingCursorRef.current = null;
+  }, [content]);
   useEffect(() => {
     const username = "user-" + Math.floor(Math.random() * 1000);
 
@@ -155,28 +173,12 @@ function App() {
             previousContentRef.current,
             message.operation,
           );
-
+          pendingCursorRef.current = {
+            start: newSelectionStart,
+            end: newSelectionEnd,
+          };
           setContent(updatedContent);
           previousContentRef.current = updatedContent;
-          requestAnimationFrame(() => {
-            console.log(
-              "RESTORING CURSOR:",
-              newSelectionStart,
-              "->",
-              newSelectionEnd,
-            );
-            if (textareaRef.current) {
-              textareaRef.current.selectionStart = newSelectionStart;
-              textareaRef.current.selectionEnd = newSelectionEnd;
-            }
-
-            console.log(
-              "CURSOR AFTER RESTORE:",
-              textareaRef.current?.selectionStart,
-              "->",
-              textareaRef.current?.selectionEnd,
-            );
-          });
         }
 
         if (message.version !== undefined) {
