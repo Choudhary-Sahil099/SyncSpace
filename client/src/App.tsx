@@ -40,6 +40,7 @@ function App() {
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
   const [connectionStatus, setConnectionStatus] = useState("Connecting…");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const sendNextOperation = () => {
     const socket = socketRef.current;
@@ -75,6 +76,7 @@ function App() {
     } catch {
       // onclose resets the in-flight flag and schedules this operation to retry.
       operationInFlightRef.current = false;
+      setErrorMessage("Your edit is saved locally and will retry when the connection returns.");
     }
 
     console.log(
@@ -123,6 +125,7 @@ function App() {
 
       if (!navigator.onLine) {
         setConnectionStatus("Waiting for network…");
+        setErrorMessage("You are offline. New edits will be sent when you reconnect.");
         return;
       }
 
@@ -150,7 +153,21 @@ function App() {
       };
 
       socket.onmessage = (event) => {
-      const message = JSON.parse(event.data);
+      let message: Record<string, any>;
+
+      try {
+        message = JSON.parse(event.data);
+      } catch {
+        setErrorMessage("Received an invalid update from the collaboration server. Retrying sync...");
+        socket.close();
+        return;
+      }
+
+      if (!message || typeof message.type !== "string") {
+        setErrorMessage("Received an invalid update from the collaboration server. Retrying sync...");
+        socket.close();
+        return;
+      }
 
       console.log("MESSAGE:", message);
       if (message.type === "users_list") {
@@ -198,6 +215,7 @@ function App() {
         waitingForSyncRef.current = false;
         hasSynchronizedRef.current = true;
         setConnectionStatus("Connected");
+        setErrorMessage(null);
         sendNextOperation();
       }
       if (message.type === "edit_ack") {
@@ -286,6 +304,7 @@ function App() {
 
         versionRef.current = message.version;
         reapplyPendingOperations(recoveredContent);
+        setErrorMessage("The document changed while you were editing. Your local edits are being recovered.");
       }
       if (message.version !== undefined) {
         console.log("DOCUMENT VERSION:", message.version);
@@ -300,6 +319,7 @@ function App() {
 
         if (!navigator.onLine) {
           setConnectionStatus("Waiting for network…");
+          setErrorMessage("You are offline. New edits will be sent when you reconnect.");
           return;
         }
 
@@ -309,13 +329,17 @@ function App() {
           RECONNECT_MAX_DELAY_MS,
         );
         setConnectionStatus(`Reconnecting in ${Math.ceil(delay / 1000)}s…`);
+        setErrorMessage("Connection lost. Retrying automatically; your edits are kept locally.");
         reconnectTimerRef.current = window.setTimeout(() => {
           reconnectTimerRef.current = null;
           connect();
         }, delay);
       };
 
-      socket.onerror = () => socket.close();
+      socket.onerror = () => {
+        setErrorMessage("Unable to reach the collaboration server. Retrying automatically.");
+        socket.close();
+      };
       socket.onclose = () => {
         if (socketRef.current === socket) socketRef.current = null;
         scheduleReconnect();
@@ -328,6 +352,7 @@ function App() {
       operationInFlightRef.current = false;
       waitingForSyncRef.current = true;
       setConnectionStatus("Waiting for network…");
+      setErrorMessage("You are offline. New edits will be sent when you reconnect.");
       socketRef.current?.close();
     };
 
@@ -417,6 +442,20 @@ function App() {
     <div style={{ padding: "40px" }}>
       <h1>SyncSpace</h1>
       <p>{connectionStatus}</p>
+      {errorMessage && (
+        <p
+          role="alert"
+          style={{
+            background: "#fff3cd",
+            border: "1px solid #ffda6a",
+            borderRadius: "4px",
+            color: "#664d03",
+            padding: "12px",
+          }}
+        >
+          {errorMessage}
+        </p>
+      )}
 
       <textarea
         ref={textareaRef}
