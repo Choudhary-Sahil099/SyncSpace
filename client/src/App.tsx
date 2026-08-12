@@ -73,6 +73,7 @@ function App() {
         }),
       );
     } catch {
+      // onclose resets the in-flight flag and schedules this operation to retry.
       operationInFlightRef.current = false;
     }
 
@@ -173,6 +174,17 @@ function App() {
           message.cursor.position,
         );
       }
+      if (message.type === "cursor_remove" || message.type === "user_left") {
+        setRemoteCursors((prev) => {
+          if (!prev[message.userId]) {
+            return prev;
+          }
+
+          const updatedCursors = { ...prev };
+          delete updatedCursors[message.userId];
+          return updatedCursors;
+        });
+      }
       if (message.type === "document_sync") {
         const syncedContent = message.content ?? "";
 
@@ -180,7 +192,8 @@ function App() {
           versionRef.current = message.version;
         }
 
-        // snapshot sending
+        // The room registration always sends an authoritative snapshot. Replay
+        // unacknowledged local edits over it, then retry the queue one at a time.
         reapplyPendingOperations(syncedContent);
         waitingForSyncRef.current = false;
         hasSynchronizedRef.current = true;
@@ -204,6 +217,8 @@ function App() {
 
         operationInFlightRef.current = false;
 
+        // During recovery this also removes a local replay of an operation the
+        // server had already applied before the connection dropped.
         if (recoveringRef.current && message.content !== undefined) {
           reapplyPendingOperations(message.content);
         }
