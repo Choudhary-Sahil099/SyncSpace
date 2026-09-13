@@ -9,9 +9,9 @@ func TestInsertOperation(t *testing.T) {
 	result, err := ApplyOperation(
 		doc,
 		&Operation{
-			Type: "insert",
+			Type:     "insert",
 			Position: 5,
-			Text: ",",
+			Text:     ",",
 		},
 	)
 

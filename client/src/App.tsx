@@ -1,502 +1,91 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import {
-  generateOperation,
-  applyOperation,
-  transformCursor,
-  type Operation,
-} from "./operation";
+import { useEffect, useState } from "react";
+import AuthPage from "./pages/AuthPage";
+import HomePage from "./pages/HomePage";
+import WorkspacePage from "./pages/WorkspacePage";
+import { type Workspace, type WorkspaceDocument } from "./api/api";
+import type { Session } from "./hooks/useCollaboration";
 
-const ROOM_ID = "room1";
-const RECONNECT_BASE_DELAY_MS = 500;
-const RECONNECT_MAX_DELAY_MS = 10_000;
+const SESSION_STORAGE_KEY = "syncspace-session";
+const WORKSPACE_STORAGE_KEY = "syncspace-workspace";
+const API_BASE = import.meta.env.VITE_API_URL ?? `${window.location.protocol}//${window.location.hostname}:8080`;
+
+type Route = { page: "home" } | { page: "workspace"; workspace: Workspace; document: WorkspaceDocument };
+
+function getStoredSession(): Session | null {
+  const saved = localStorage.getItem(SESSION_STORAGE_KEY);
+  if (!saved) return null;
+  try { return JSON.parse(saved) as Session; } catch { localStorage.removeItem(SESSION_STORAGE_KEY); return null; }
+}
 
 function App() {
-  const [content, setContent] = useState("");
-  const [users, setUsers] = useState<string[]>([]);
-  const socketRef = useRef<WebSocket | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const previousContentRef = useRef("");
-  type RemoteCursor = {
-    username: string;
-    position: number;
-    selectionStart: number;
-    selectionEnd: number;
-    color: string;
-  };
+  const [session, setSession] = useState<Session | null>(getStoredSession);
+  const [route, setRoute] = useState<Route>({ page: "home" });
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isSubmittingAuth, setIsSubmittingAuth] = useState(false);
 
-  const [remoteCursors, setRemoteCursors] = useState<
-    Record<string, RemoteCursor>
-  >({});
-  const versionRef = useRef(0);
-  const pendingCursorRef = useRef<{
-    start: number;
-    end: number;
-  } | null>(null);
-  const pendingOperationsRef = useRef<Operation[]>([]);
-  const operationInFlightRef = useRef(false);
-  const waitingForSyncRef = useRef(true);
-  const hasSynchronizedRef = useRef(false);
-  const recoveringRef = useRef(false);
-  const reconnectTimerRef = useRef<number | null>(null);
-  const reconnectAttemptRef = useRef(0);
-  const [connectionStatus, setConnectionStatus] = useState("Connecting…");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  const sendNextOperation = () => {
-    const socket = socketRef.current;
-    if (
-      operationInFlightRef.current ||
-      waitingForSyncRef.current ||
-      socket?.readyState !== WebSocket.OPEN
-    ) {
-      return;
-    }
-
-    const operation = pendingOperationsRef.current[0];
-
-    if (!operation) {
-      return;
-    }
-
-    operationInFlightRef.current = true;
-
-    try {
-      socket.send(
-        JSON.stringify({
-          type: "edit",
-          roomId: ROOM_ID,
-          operation: {
-            ...operation,
-            baseVersion: versionRef.current,
-            timestamp: Date.now(),
-          },
-          version: versionRef.current,
-        }),
-      );
-    } catch {
-      // onclose resets the in-flight flag and schedules this operation to retry.
-      operationInFlightRef.current = false;
-      setErrorMessage("Your edit is saved locally and will retry when the connection returns.");
-    }
-
-    console.log(
-      "SENDING QUEUED OPERATION:",
-      operation,
-      "BASE VERSION:",
-      versionRef.current,
-    );
-  };
-  useLayoutEffect(() => {
-    const cursor = pendingCursorRef.current;
-
-    if (!cursor || !textareaRef.current) {
-      return;
-    }
-
-    textareaRef.current.selectionStart = cursor.start;
-    textareaRef.current.selectionEnd = cursor.end;
-
-    console.log("LAYOUT CURSOR RESTORE:", cursor.start, "->", cursor.end);
-
-    pendingCursorRef.current = null;
-  }, [content]);
   useEffect(() => {
-    const usernameKey = "syncspace-username";
-    const username =
-      sessionStorage.getItem(usernameKey) ??
-      `user-${Math.floor(Math.random() * 1000)}`;
-    sessionStorage.setItem(usernameKey, username);
-    let disposed = false;
+    if (!session) return;
+    const raw = localStorage.getItem(WORKSPACE_STORAGE_KEY);
+    if (!raw) return;
+    try {
+      const saved = JSON.parse(raw) as { workspace: Workspace; document: WorkspaceDocument };
+      setRoute({ page: "workspace", workspace: saved.workspace, document: saved.document });
+    } catch { localStorage.removeItem(WORKSPACE_STORAGE_KEY); }
+  }, [session]);
 
-    const reapplyPendingOperations = (serverContent: string) => {
-      const recoveredContent = pendingOperationsRef.current.reduce(
-        (currentContent, operation) => applyOperation(currentContent, operation),
-        serverContent,
-      );
-
-      setContent(recoveredContent);
-      previousContentRef.current = recoveredContent;
-    };
-
-    const connect = () => {
-      if (disposed) {
-        return;
-      }
-
-      if (!navigator.onLine) {
-        setConnectionStatus("Waiting for network…");
-        setErrorMessage("You are offline. New edits will be sent when you reconnect.");
-        return;
-      }
-
-      const currentSocket = socketRef.current;
-      if (
-        currentSocket?.readyState === WebSocket.OPEN ||
-        currentSocket?.readyState === WebSocket.CONNECTING
-      ) {
-        return;
-      }
-
-      waitingForSyncRef.current = true;
-      recoveringRef.current = hasSynchronizedRef.current;
-      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-      const socket = new WebSocket(
-        `${protocol}://${window.location.hostname}:8080/ws/${ROOM_ID}?username=${encodeURIComponent(username)}`,
-      );
-      socketRef.current = socket;
-
-      socket.onopen = () => {
-        if (socketRef.current !== socket) return;
-        reconnectAttemptRef.current = 0;
-        setConnectionStatus("Connected — synchronizing…");
-        console.log("CONNECTED");
-      };
-
-      socket.onmessage = (event) => {
-      let message: Record<string, any>;
-
-      try {
-        message = JSON.parse(event.data);
-      } catch {
-        setErrorMessage("Received an invalid update from the collaboration server. Retrying sync...");
-        socket.close();
-        return;
-      }
-
-      if (!message || typeof message.type !== "string") {
-        setErrorMessage("Received an invalid update from the collaboration server. Retrying sync...");
-        socket.close();
-        return;
-      }
-
-      console.log("MESSAGE:", message);
-      if (message.type === "users_list") {
-        setUsers(message.users);
-      }
-      if (message.type === "cursor_move") {
-        setRemoteCursors((prev) => ({
-          ...prev,
-          [message.userId]: {
-            username: message.username,
-            position: message.cursor.position,
-            selectionStart: message.cursor.selectionStart,
-            selectionEnd: message.cursor.selectionEnd,
-            color: "blue",
-          },
-        }));
-
-        console.log(
-          "REMOTE CURSOR:",
-          message.username,
-          message.cursor.position,
-        );
-      }
-      if (message.type === "cursor_remove" || message.type === "user_left") {
-        setRemoteCursors((prev) => {
-          if (!prev[message.userId]) {
-            return prev;
-          }
-
-          const updatedCursors = { ...prev };
-          delete updatedCursors[message.userId];
-          return updatedCursors;
-        });
-      }
-      if (message.type === "document_sync") {
-        const syncedContent = message.content ?? "";
-
-        if (message.version !== undefined) {
-          versionRef.current = message.version;
-        }
-
-        // The room registration always sends an authoritative snapshot. Replay
-        // unacknowledged local edits over it, then retry the queue one at a time.
-        reapplyPendingOperations(syncedContent);
-        waitingForSyncRef.current = false;
-        hasSynchronizedRef.current = true;
-        setConnectionStatus("Connected");
-        setErrorMessage(null);
-        sendNextOperation();
-      }
-      if (message.type === "edit_ack") {
-        console.log("EDIT ACK:", message.version);
-
-        if (message.version !== undefined) {
-          versionRef.current = message.version;
-        }
-
-        const acknowledgedOperation = pendingOperationsRef.current[0];
-        if (
-          acknowledgedOperation &&
-          (!message.operation || message.operation.id === acknowledgedOperation.id)
-        ) {
-          pendingOperationsRef.current.shift();
-        }
-
-        operationInFlightRef.current = false;
-
-        // During recovery this also removes a local replay of an operation the
-        // server had already applied before the connection dropped.
-        if (recoveringRef.current && message.content !== undefined) {
-          reapplyPendingOperations(message.content);
-        }
-
-        if (pendingOperationsRef.current.length === 0) {
-          recoveringRef.current = false;
-        }
-
-        console.log(
-          "OPERATION ACKNOWLEDGED",
-          "REMAINING QUEUE:",
-          pendingOperationsRef.current.length,
-        );
-        sendNextOperation();
-      }
-      if (message.type === "edit") {
-        if (message.operation) {
-          const selectionStart = textareaRef.current?.selectionStart ?? 0;
-
-          const selectionEnd = textareaRef.current?.selectionEnd ?? 0;
-          console.log("REMOTE EDIT DEBUG:", {
-            currentContent: previousContentRef.current,
-            cursorStart: selectionStart,
-            cursorEnd: selectionEnd,
-            operation: message.operation,
-          });
-          const newSelectionStart = transformCursor(
-            selectionStart,
-            message.operation,
-          );
-
-          const newSelectionEnd = transformCursor(
-            selectionEnd,
-            message.operation,
-          );
-          console.log("CURSOR BEFORE:", selectionStart, "->", selectionEnd);
-
-          console.log(
-            "CURSOR AFTER TRANSFORM:",
-            newSelectionStart,
-            "->",
-            newSelectionEnd,
-          );
-          const updatedContent = applyOperation(
-            previousContentRef.current,
-            message.operation,
-          );
-          pendingCursorRef.current = {
-            start: newSelectionStart,
-            end: newSelectionEnd,
-          };
-          setContent(updatedContent);
-          previousContentRef.current = updatedContent;
-        }
-
-        if (message.version !== undefined) {
-          versionRef.current = message.version;
-        }
-      }
-
-      if (message.type === "version_conflict") {
-        console.log("CONFLICT RECOVERY", message.version);
-
-        const recoveredContent = message.content ?? "";
-
-        versionRef.current = message.version;
-        reapplyPendingOperations(recoveredContent);
-        setErrorMessage("The document changed while you were editing. Your local edits are being recovered.");
-      }
-      if (message.version !== undefined) {
-        console.log("DOCUMENT VERSION:", message.version);
-      }
-      };
-
-      const scheduleReconnect = () => {
-        if (disposed || reconnectTimerRef.current !== null) return;
-
-        operationInFlightRef.current = false;
-        waitingForSyncRef.current = true;
-
-        if (!navigator.onLine) {
-          setConnectionStatus("Waiting for network…");
-          setErrorMessage("You are offline. New edits will be sent when you reconnect.");
-          return;
-        }
-
-        const attempt = reconnectAttemptRef.current++;
-        const delay = Math.min(
-          RECONNECT_BASE_DELAY_MS * 2 ** attempt,
-          RECONNECT_MAX_DELAY_MS,
-        );
-        setConnectionStatus(`Reconnecting in ${Math.ceil(delay / 1000)}s…`);
-        setErrorMessage("Connection lost. Retrying automatically; your edits are kept locally.");
-        reconnectTimerRef.current = window.setTimeout(() => {
-          reconnectTimerRef.current = null;
-          connect();
-        }, delay);
-      };
-
-      socket.onerror = () => {
-        setErrorMessage("Unable to reach the collaboration server. Retrying automatically.");
-        socket.close();
-      };
-      socket.onclose = () => {
-        if (socketRef.current === socket) socketRef.current = null;
-        scheduleReconnect();
-      };
-    };
-
-    connect();
-
-    const handleOffline = () => {
-      operationInFlightRef.current = false;
-      waitingForSyncRef.current = true;
-      setConnectionStatus("Waiting for network…");
-      setErrorMessage("You are offline. New edits will be sent when you reconnect.");
-      socketRef.current?.close();
-    };
-
-    const handleOnline = () => {
-      if (reconnectTimerRef.current !== null) {
-        window.clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
-      setConnectionStatus("Reconnecting…");
-      connect();
-    };
-
-    window.addEventListener("offline", handleOffline);
-    window.addEventListener("online", handleOnline);
-
-    return () => {
-      disposed = true;
-      window.removeEventListener("offline", handleOffline);
-      window.removeEventListener("online", handleOnline);
-      if (reconnectTimerRef.current !== null) {
-        window.clearTimeout(reconnectTimerRef.current);
-      }
-      socketRef.current?.close();
-    };
-  }, []);
-  const handleCursorMove = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-    const selectionStart = e.currentTarget.selectionStart;
-    const selectionEnd = e.currentTarget.selectionEnd;
-
-    const position = selectionEnd;
-
-    if (socketRef.current?.readyState !== WebSocket.OPEN) return;
-
-    socketRef.current.send(
-      JSON.stringify({
-        type: "cursor_move",
-        roomId: ROOM_ID,
-        cursor: {
-          position,
-          selectionStart,
-          selectionEnd,
-        },
-      }),
-    );
-
-    console.log(
-      "CURSOR SENT:",
-      position,
-      "Selection:",
-      selectionStart,
-      "->",
-      selectionEnd,
-    );
+  const handleAuthSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const email = String(form.get("email") ?? "");
+    const password = String(form.get("password") ?? "");
+    const username = String(form.get("username") ?? "");
+    setAuthError(null); setIsSubmittingAuth(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/${isRegistering ? "register" : "login"}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(isRegistering ? { email, username, password } : { email, password }),
+      });
+      const body = await response.json() as Session | { error?: string };
+      if (!response.ok) throw new Error("error" in body ? body.error ?? "Unable to sign in." : "Unable to sign in.");
+      const next = body as Session;
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
+      setSession(next); setRoute({ page: "home" });
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Unable to sign in. Please try again.");
+    } finally { setIsSubmittingAuth(false); }
   };
 
-  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newContent = e.target.value;
-
-    const oldContent = previousContentRef.current ?? "";
-
-    const operation = generateOperation(oldContent, newContent);
-    console.log("OLD:", JSON.stringify(oldContent));
-    console.log("NEW:", JSON.stringify(newContent));
-    console.log("GENERATED OP:", operation);
-
-    setContent(newContent);
-
-    previousContentRef.current = newContent;
-
-    if (!operation) {
-      return;
-    }
-
-    pendingOperationsRef.current.push(operation);
-
-    console.log(
-      "OPERATION QUEUED:",
-      operation,
-      "QUEUE SIZE:",
-      pendingOperationsRef.current.length,
-    );
-
-    sendNextOperation();
+  const logout = () => {
+    localStorage.removeItem(SESSION_STORAGE_KEY); localStorage.removeItem(WORKSPACE_STORAGE_KEY);
+    setSession(null); setRoute({ page: "home" });
   };
 
-  return (
-    <div style={{ padding: "40px" }}>
-      <h1>SyncSpace</h1>
-      <p>{connectionStatus}</p>
-      {errorMessage && (
-        <p
-          role="alert"
-          style={{
-            background: "#fff3cd",
-            border: "1px solid #ffda6a",
-            borderRadius: "4px",
-            color: "#664d03",
-            padding: "12px",
-          }}
-        >
-          {errorMessage}
-        </p>
-      )}
+  if (!session) return <AuthPage isRegistering={isRegistering} isSubmittingAuth={isSubmittingAuth} authError={authError} onSubmit={handleAuthSubmit} onToggleMode={() => { setIsRegistering(v => !v); setAuthError(null); }} />;
 
-      <textarea
-        ref={textareaRef}
-        value={content}
-        onChange={handleChange}
-        onSelect={handleCursorMove}
-        style={{
-          width: "100%",
-          height: "500px",
-          fontSize: "18px",
+  if (route.page === "workspace") {
+    return (
+      <WorkspacePage
+        session={session}
+        workspace={route.workspace}
+        document={route.document}
+        onLogout={logout}
+        onHome={() => {
+          localStorage.removeItem(WORKSPACE_STORAGE_KEY);
+          setRoute({ page: "home" });
+        }}
+        onOpenDocument={(document, workspace) => {
+          localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify({ workspace, document }));
+          setRoute({ page: "workspace", workspace, document });
+        }}
+        onWorkspaceUpdated={(updated) => {
+          setRoute((r) => (r.page === "workspace" ? { ...r, workspace: updated } : r));
         }}
       />
-      <h3>Remote Cursors</h3>
+    );
+  }
 
-      {Object.entries(remoteCursors).map(([userId, cursor]) => (
-        <div
-          key={userId}
-          style={{
-            color: cursor.color,
-            fontWeight: "bold",
-            marginBottom: "12px",
-          }}
-        >
-          <div>● {cursor.username}</div>
-
-          <div>Cursor: {cursor.position}</div>
-
-          <div>
-            Selection: {cursor.selectionStart} → {cursor.selectionEnd}
-          </div>
-        </div>
-      ))}
-      <div>
-        <h3>Collaborators</h3>
-
-        {users.map((user) => (
-          <div key={user}>{user}</div>
-        ))}
-      </div>
-    </div>
-  );
+  return <HomePage session={session} onLogout={logout} onOpenDocument={(document, workspace) => { localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify({ workspace, document })); setRoute({ page: "workspace", workspace, document }); }} />;
 }
 
 export default App;

@@ -16,16 +16,15 @@ function createOperationId(): string {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-export function generateOperation(
+export function generateOperations(
   oldContent: string,
   newContent: string,
-): Operation | null {
+): Operation[] {
   if (oldContent === newContent) {
-    return null;
+    return [];
   }
 
   let start = 0;
-
   while (
     start < oldContent.length &&
     start < newContent.length &&
@@ -36,7 +35,6 @@ export function generateOperation(
 
   let oldEnd = oldContent.length;
   let newEnd = newContent.length;
-
   while (
     oldEnd > start &&
     newEnd > start &&
@@ -46,30 +44,37 @@ export function generateOperation(
     newEnd--;
   }
 
-  if (oldEnd === start) {
-    return {
-      id: createOperationId(),
-      type: "insert",
-      position: start,
-      text: newContent.slice(start, newEnd),
-    };
-  }
+  const ops: Operation[] = [];
 
-  if (newEnd === start) {
-    return {
+  // If characters were deleted
+  if (oldEnd > start) {
+    ops.push({
       id: createOperationId(),
       type: "delete",
       position: start,
       length: oldEnd - start,
-    };
+    });
   }
 
-  return {
-    id: createOperationId(),
-    type: "delete",
-    position: start,
-    length: oldEnd - start,
-  };
+  // If characters were inserted
+  if (newEnd > start) {
+    ops.push({
+      id: createOperationId(),
+      type: "insert",
+      position: start,
+      text: newContent.slice(start, newEnd),
+    });
+  }
+
+  return ops;
+}
+
+export function generateOperation(
+  oldContent: string,
+  newContent: string,
+): Operation | null {
+  const ops = generateOperations(oldContent, newContent);
+  return ops.length > 0 ? ops[0] : null;
 }
 
 export function applyOperation(

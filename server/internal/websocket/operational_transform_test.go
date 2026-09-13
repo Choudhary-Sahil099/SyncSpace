@@ -3,6 +3,7 @@ package websocket
 import (
 	"testing"
 )
+
 func TestTransformInsertInsert(t *testing.T) {
 
 	history := Operation{

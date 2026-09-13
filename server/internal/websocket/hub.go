@@ -1,13 +1,18 @@
 package websocket
 
 import (
+	"encoding/json"
 	"fmt"
+	"syncspace/internal/jobs"
+	"syncspace/internal/relay"
 	"syncspace/internal/storage"
 )
 
 type Hub struct {
 	Rooms map[string]*Room
-	Store *storage.DocumentStore
+	Store storage.DocumentStore
+	Redis *relay.RedisRelay
+	Jobs  *jobs.Queue
 
 	OTEngine *OTEngine
 
@@ -17,9 +22,15 @@ type Hub struct {
 }
 
 func NewHub() *Hub {
+	return NewHubWithStore(storage.NewDocumentStore(), nil, nil)
+}
+
+func NewHubWithStore(store storage.DocumentStore, redisRelay *relay.RedisRelay, jobQueue *jobs.Queue) *Hub {
 	return &Hub{
 		Rooms:      make(map[string]*Room),
-		Store:      storage.NewDocumentStore(),
+		Store:      store,
+		Redis:      redisRelay,
+		Jobs:       jobQueue,
 		OTEngine:   NewOTEngine(),
 		Register:   make(chan *Client),
 		Unregister: make(chan *Client),
@@ -87,7 +98,26 @@ func (h *Hub) broadcastUsers(room *Room) {
 	}
 }
 
+func (h *Hub) startRedisSubscriber() {
+	if h.Redis == nil {
+		return
+	}
+	go func() {
+		for message := range h.Redis.Messages() {
+			var envelope struct {
+				Origin  string  `json:"origin"`
+				Message Message `json:"message"`
+			}
+			if json.Unmarshal([]byte(message.Payload), &envelope) != nil || envelope.Origin == h.Redis.Origin {
+				continue
+			}
+			h.Broadcast <- Event{Client: nil, Message: envelope.Message}
+		}
+	}()
+}
+
 func (h *Hub) Run() {
+	h.startRedisSubscriber()
 
 	for {
 
@@ -230,7 +260,7 @@ func (h *Hub) Run() {
 			sender := event.Client
 
 			if room, ok := h.Rooms[message.RoomID]; ok {
-				if message.Type == "cursor_move" {
+				if sender != nil && message.Type == "cursor_move" {
 
 					if message.Cursor != nil {
 
@@ -242,6 +272,13 @@ func (h *Hub) Run() {
 						}
 						message.UserID = sender.ID
 						message.Username = sender.Username
+						if h.Redis != nil {
+							payload, _ := json.Marshal(struct {
+								Origin  string  `json:"origin"`
+								Message Message `json:"message"`
+							}{h.Redis.Origin, message})
+							_ = h.Redis.Publish(payload)
+						}
 
 						fmt.Printf(
 							"CURSOR STATE: %+v\n",
@@ -250,7 +287,7 @@ func (h *Hub) Run() {
 					}
 				}
 
-				if message.Type == "edit" {
+				if sender != nil && message.Type == "edit" {
 
 					doc := h.Store.GetDocument(message.RoomID)
 
@@ -281,6 +318,7 @@ func (h *Hub) Run() {
 					}
 
 					// Build the authoritative operation from the sender.
+					message.UserID = sender.ID
 					operation := *message.Operation
 
 					operation.UserID = sender.ID
@@ -392,7 +430,7 @@ func (h *Hub) Run() {
 
 				for client := range room.Clients {
 
-					if client == sender &&
+					if sender != nil && client == sender &&
 						(message.Type == "cursor_move" ||
 							message.Type == "edit") {
 						continue

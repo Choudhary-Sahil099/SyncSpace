@@ -30,6 +30,10 @@ func RegisterRoutes(router *gin.Engine, service *Service) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		if err := service.EnsureDefaultWorkspace(user); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not initialize workspace"})
+			return
+		}
 		respondWithSession(c, service, user)
 	})
 
@@ -43,6 +47,10 @@ func RegisterRoutes(router *gin.Engine, service *Service) {
 		user, err := service.Login(request.Email, request.Password)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid email or password"})
+			return
+		}
+		if err := service.EnsureDefaultWorkspace(user); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not initialize workspace"})
 			return
 		}
 		respondWithSession(c, service, user)
