@@ -34,7 +34,7 @@ export type Workspace = {
   description: string;
   role: string;
   inviteCode?: string;
-  members: WorkspaceMember[];
+  members?: WorkspaceMember[];
   documents: WorkspaceDocument[];
   tasks?: WorkspaceTask[];
 };

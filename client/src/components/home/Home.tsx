@@ -249,7 +249,7 @@ export default function Home({
             <span>Documents</span>
           </div>
           <div>
-            <strong>{workspace?.members.length ?? 1}</strong>
+           <strong>{workspace?.members?.length ?? 0}</strong>
             <span>Members</span>
           </div>
           <div>
@@ -483,7 +483,7 @@ export default function Home({
           <div className="activity-item">
             <div className="activity-avatar">WS</div>
             <div>
-              <strong>{workspace?.members.length ?? 1} member(s) collaborated</strong>
+              <strong>{workspace?.members?.length ?? 0} member(s) collaborated</strong>
               <span>Real-time Operational Transformation active</span>
             </div>
           </div>
